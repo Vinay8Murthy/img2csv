@@ -1,6 +1,11 @@
 const STORAGE_KEY = "expenseTrackerTransactions";
 const OPTIONS_STORAGE_KEY = "expenseTrackerOptions";
-const DATE_INPUT_PATTERN = /^\d{2}[\/-]\d{2}[\/-]\d{2,4}$/;
+const MANUAL_IMPORT_STORAGE_KEY = "expenseTrackerManualImportText";
+const DATE_INPUT_PATTERN = /^\d{2}[\/-]\d{2}[\/-]\d{2,4}$|^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}$/i;
+const ENTRY_DATE_PATTERN = /\b(?:\d{2}[\/-]\d{2}[\/-]\d{2,4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4})\b/i;
+const TIME_PATTERN = /\b\d{1,2}:\d{2}\s*(?:am|pm)\b/i;
+const CURRENCY_PATTERN =
+  /(?:₹|Rs\.?\s*)\s*-?\d[\d,]*(?:\.\d{2})?|-?\d{1,3}(?:,\d{3})+(?:\.\d{2})?|-?\d+\.\d{2}/g;
 const FIELD_CONFIG = [
   { key: "date", type: "text" },
   { key: "description", type: "text" },
@@ -37,15 +42,36 @@ const NEW_OPTION_VALUE = "__new__";
 
 let transactions = loadTransactions();
 let options = loadOptions();
+let manualDrafts = [];
+let selectedIds = new Set();
+let currentFilter = "";
+let currentSort = "importedAt-desc";
 
 document.getElementById("addRowBtn").onclick = addRow;
+document.getElementById("deleteSelectedBtn").onclick = deleteSelectedRows;
 document.getElementById("csvBtn").onclick = downloadCsv;
 document.getElementById("excelBtn").onclick = downloadExcel;
 document.getElementById("pdfBtn").onclick = downloadPdf;
 document.getElementById("clearBtn").onclick = clearAll;
+document.getElementById("filterInput").addEventListener("input", event => {
+  currentFilter = event.target.value.trim().toLowerCase();
+  render();
+});
+document.getElementById("sortSelect").addEventListener("change", event => {
+  currentSort = event.target.value;
+  render();
+});
+document.getElementById("selectAllRows").addEventListener("change", event => {
+  toggleSelectAllVisible(event.target.checked);
+});
+document.getElementById("generateDraftsBtn").onclick = generateManualDrafts;
+document.getElementById("addDraftsBtn").onclick = addManualDraftsToTracker;
+document.getElementById("clearManualImportBtn").onclick = clearManualImport;
 
 bindTabs();
 bindOptionManagers();
+loadManualImportState();
+setActiveTab(getInitialTab());
 render();
 
 function loadTransactions() {
@@ -91,6 +117,7 @@ function loadOptions() {
 
 function createTransactionRecord(transaction = {}) {
   return {
+    id: transaction.id || createRecordId(),
     date: transaction.date || "",
     description: transaction.description || "",
     debit: transaction.debit || "",
@@ -99,23 +126,33 @@ function createTransactionRecord(transaction = {}) {
     subCategory: transaction.subCategory || "",
     group: transaction.group || "",
     sourceFile: transaction.sourceFile || "",
-    importedAt: transaction.importedAt || ""
+    importedAt: transaction.importedAt || new Date().toISOString()
   };
+}
+
+function createRecordId() {
+  return `txn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function render() {
   const tbody = document.querySelector("#table tbody");
   const trackerStatus = document.getElementById("trackerStatus");
   const validationSummary = document.getElementById("validationSummary");
+  const selectAll = document.getElementById("selectAllRows");
+  const filterInput = document.getElementById("filterInput");
+  const sortSelect = document.getElementById("sortSelect");
+  const visibleTransactions = getVisibleTransactions();
   const issues = collectValidationIssues();
 
   tbody.innerHTML = "";
+  filterInput.value = currentFilter;
+  sortSelect.value = currentSort;
 
   if (!transactions.length) {
     trackerStatus.textContent = "No records loaded yet. Scan a statement or add a row manually.";
   } else {
     trackerStatus.textContent =
-      `${transactions.length} total record(s) ready to review. ` +
+      `${visibleTransactions.length} visible of ${transactions.length} total record(s). ` +
       "Previously scanned records stay here until you clear them.";
   }
 
@@ -124,9 +161,20 @@ function render() {
     : "All records look valid for export.";
   validationSummary.className = issues.length ? "validation-summary invalid" : "validation-summary valid";
 
-  transactions.forEach((transaction, index) => {
+  visibleTransactions.forEach(transaction => {
     const row = document.createElement("tr");
     const rowIssues = validateTransaction(transaction);
+    const selectCell = document.createElement("td");
+    const checkbox = document.createElement("input");
+
+    checkbox.type = "checkbox";
+    checkbox.checked = selectedIds.has(transaction.id);
+    checkbox.setAttribute("aria-label", "Select row");
+    checkbox.addEventListener("change", event => {
+      toggleSelected(transaction.id, event.target.checked);
+    });
+    selectCell.appendChild(checkbox);
+    row.appendChild(selectCell);
 
     FIELD_CONFIG.forEach(field => {
       const cell = document.createElement("td");
@@ -135,16 +183,16 @@ function render() {
       if (field.type === "select") {
         control = createSelect(field.optionType, transaction[field.key], value => {
           if (value === NEW_OPTION_VALUE) {
-            createOptionFromPrompt(field.optionType, index, field.key, transaction[field.key]);
+            createOptionFromPrompt(field.optionType, transaction.id, field.key, transaction[field.key]);
             return;
           }
 
-          update(index, field.key, value);
+          update(transaction.id, field.key, value);
         });
       } else {
         control = document.createElement("input");
         control.value = transaction[field.key];
-        control.type = field.type === "number" ? "text" : "text";
+        control.type = "text";
         control.setAttribute("aria-label", field.key);
 
         if (field.key === "date") {
@@ -156,7 +204,7 @@ function render() {
         }
 
         control.addEventListener("input", event => {
-          update(index, field.key, event.target.value);
+          update(transaction.id, field.key, event.target.value);
         });
       }
 
@@ -174,13 +222,17 @@ function render() {
 
     removeButton.textContent = "Delete";
     removeButton.className = "danger";
-    removeButton.onclick = () => removeRow(index);
+    removeButton.onclick = () => removeRow(transaction.id);
     actionCell.appendChild(removeButton);
     row.appendChild(actionCell);
 
     tbody.appendChild(row);
   });
 
+  selectAll.checked =
+    visibleTransactions.length > 0 && visibleTransactions.every(transaction => selectedIds.has(transaction.id));
+
+  renderManualDrafts();
   renderOptionManagers();
 }
 
@@ -188,6 +240,18 @@ function bindTabs() {
   document.querySelectorAll(".tab-button").forEach(button => {
     button.addEventListener("click", () => setActiveTab(button.dataset.tab));
   });
+}
+
+function getInitialTab() {
+  const params = new URLSearchParams(window.location.search);
+  const requested = params.get("tab");
+
+  if (requested) {
+    return requested;
+  }
+
+  const manualText = localStorage.getItem(MANUAL_IMPORT_STORAGE_KEY);
+  return manualText ? "manualImport" : "records";
 }
 
 function setActiveTab(tabName) {
@@ -202,14 +266,17 @@ function setActiveTab(tabName) {
   });
 }
 
-function update(index, key, value) {
-  transactions[index][key] = value;
+function update(id, key, value) {
+  transactions = transactions.map(transaction =>
+    transaction.id === id ? { ...transaction, [key]: value } : transaction
+  );
   saveTransactions();
   render();
 }
 
-function removeRow(index) {
-  transactions.splice(index, 1);
+function removeRow(id) {
+  transactions = transactions.filter(transaction => transaction.id !== id);
+  selectedIds.delete(id);
   saveTransactions();
   render();
 }
@@ -222,7 +289,39 @@ function addRow() {
 
 function clearAll() {
   transactions = [];
+  selectedIds.clear();
   saveTransactions();
+  render();
+}
+
+function deleteSelectedRows() {
+  if (!selectedIds.size) {
+    window.alert("Select at least one row to delete.");
+    return;
+  }
+
+  transactions = transactions.filter(transaction => !selectedIds.has(transaction.id));
+  selectedIds.clear();
+  saveTransactions();
+  render();
+}
+
+function toggleSelected(id, checked) {
+  if (checked) {
+    selectedIds.add(id);
+  } else {
+    selectedIds.delete(id);
+  }
+}
+
+function toggleSelectAllVisible(checked) {
+  getVisibleTransactions().forEach(transaction => {
+    if (checked) {
+      selectedIds.add(transaction.id);
+    } else {
+      selectedIds.delete(transaction.id);
+    }
+  });
   render();
 }
 
@@ -234,12 +333,92 @@ function saveOptions() {
   localStorage.setItem(OPTIONS_STORAGE_KEY, JSON.stringify(options));
 }
 
+function getVisibleTransactions() {
+  const filtered = transactions.filter(transaction => matchesFilter(transaction, currentFilter));
+  return filtered.sort(compareTransactions(currentSort));
+}
+
+function matchesFilter(transaction, filter) {
+  if (!filter) {
+    return true;
+  }
+
+  const haystack = [
+    transaction.date,
+    transaction.description,
+    transaction.debit,
+    transaction.credit,
+    transaction.category,
+    transaction.subCategory,
+    transaction.group,
+    transaction.sourceFile
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes(filter);
+}
+
+function compareTransactions(sortValue) {
+  const [field, direction] = sortValue.split("-");
+  const multiplier = direction === "asc" ? 1 : -1;
+
+  return (left, right) => {
+    let leftValue;
+    let rightValue;
+
+    if (field === "amount") {
+      leftValue = parseAmountValue(left.debit || left.credit);
+      rightValue = parseAmountValue(right.debit || right.credit);
+    } else if (field === "date") {
+      leftValue = parseDateValue(left.date);
+      rightValue = parseDateValue(right.date);
+    } else if (field === "importedAt") {
+      leftValue = Date.parse(left.importedAt || 0);
+      rightValue = Date.parse(right.importedAt || 0);
+    } else {
+      leftValue = String(left[field] || "").toLowerCase();
+      rightValue = String(right[field] || "").toLowerCase();
+    }
+
+    if (leftValue < rightValue) {
+      return -1 * multiplier;
+    }
+
+    if (leftValue > rightValue) {
+      return 1 * multiplier;
+    }
+
+    return 0;
+  };
+}
+
+function parseDateValue(value) {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return 0;
+  }
+
+  if (/^\d{2}[\/-]\d{2}[\/-]\d{2,4}$/.test(text)) {
+    const [day, month, yearText] = text.split(/[\/-]/);
+    const year = yearText.length === 2 ? `20${yearText}` : yearText;
+    return Date.parse(`${year}-${month}-${day}`) || 0;
+  }
+
+  return Date.parse(text) || 0;
+}
+
+function parseAmountValue(value) {
+  return parseFloat(String(value || "").replace(/,/g, "").trim()) || 0;
+}
+
 function downloadCsv() {
   if (!ensureValidForExport()) {
     return;
   }
 
-  const csv = Papa.unparse(transactions);
+  const csv = Papa.unparse(transactions.map(stripInternalFields));
   downloadFile(csv, "transactions.csv", "text/csv");
 }
 
@@ -248,7 +427,7 @@ function downloadExcel() {
     return;
   }
 
-  const ws = XLSX.utils.json_to_sheet(transactions);
+  const ws = XLSX.utils.json_to_sheet(transactions.map(stripInternalFields));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Transactions");
   XLSX.writeFile(wb, "transactions.xlsx");
@@ -284,6 +463,20 @@ function downloadPdf() {
   doc.save("transactions.pdf");
 }
 
+function stripInternalFields(transaction) {
+  return {
+    date: transaction.date,
+    description: transaction.description,
+    debit: transaction.debit,
+    credit: transaction.credit,
+    category: transaction.category,
+    subCategory: transaction.subCategory,
+    group: transaction.group,
+    sourceFile: transaction.sourceFile,
+    importedAt: transaction.importedAt
+  };
+}
+
 function downloadFile(content, name, type) {
   const blob = new Blob([content], { type });
   const anchor = document.createElement("a");
@@ -296,7 +489,7 @@ function downloadFile(content, name, type) {
 }
 
 function escapeHtml(value) {
-  return value
+  return String(value)
     .replace(/&/g, "&amp;")
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
@@ -390,7 +583,7 @@ function createSelect(type, selectedValue, onChange) {
   return select;
 }
 
-function createOptionFromPrompt(type, rowIndex, fieldKey, currentValue) {
+function createOptionFromPrompt(type, recordId, fieldKey, currentValue) {
   const label = readableType(type);
   const value = window.prompt(`Create a new ${label.toLowerCase()}:`, currentValue || "");
 
@@ -407,7 +600,7 @@ function createOptionFromPrompt(type, rowIndex, fieldKey, currentValue) {
     return;
   }
 
-  update(rowIndex, fieldKey, result.value);
+  update(recordId, fieldKey, result.value);
   setActiveTab("records");
 }
 
@@ -509,7 +702,6 @@ function showOptionError(type, message) {
 function collectValidationIssues() {
   return transactions.flatMap((transaction, index) => {
     const issues = validateTransaction(transaction);
-
     return Object.values(issues).map(message => `Row ${index + 1}: ${message}`);
   });
 }
@@ -520,7 +712,7 @@ function validateTransaction(transaction) {
   const hasCredit = Boolean(String(transaction.credit).trim());
 
   if (!DATE_INPUT_PATTERN.test(String(transaction.date).trim())) {
-    issues.date = "Use a valid date like DD/MM/YY or DD-MM-YYYY.";
+    issues.date = "Use a valid date like DD/MM/YY or Mar 15, 2026.";
   }
 
   if (!String(transaction.description).trim()) {
@@ -588,4 +780,205 @@ function readableType(type) {
   }
 
   return type.charAt(0).toUpperCase() + type.slice(1);
+}
+
+function loadManualImportState() {
+  const text = localStorage.getItem(MANUAL_IMPORT_STORAGE_KEY) || "";
+  document.getElementById("manualImportText").value = text;
+
+  if (text.trim()) {
+    manualDrafts = createManualDrafts(text);
+  }
+}
+
+function generateManualDrafts() {
+  const text = document.getElementById("manualImportText").value;
+  localStorage.setItem(MANUAL_IMPORT_STORAGE_KEY, text);
+  manualDrafts = createManualDrafts(text);
+  setActiveTab("manualImport");
+  render();
+}
+
+function clearManualImport() {
+  document.getElementById("manualImportText").value = "";
+  localStorage.removeItem(MANUAL_IMPORT_STORAGE_KEY);
+  manualDrafts = [];
+  render();
+}
+
+function createManualDrafts(text) {
+  const normalized = String(text || "").replace(/\r/g, "").trim();
+
+  if (!normalized) {
+    return [];
+  }
+
+  const parsedRows =
+    typeof detectAndParse === "function" ? detectAndParse(normalized).map(createTransactionRecord) : [];
+
+  if (parsedRows.length) {
+    return parsedRows;
+  }
+
+  return splitManualEntries(normalized).map(buildDraftFromBlock);
+}
+
+function splitManualEntries(text) {
+  const lines = text
+    .split("\n")
+    .map(line => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const entries = [];
+  let current = "";
+
+  lines.forEach(line => {
+    if (ENTRY_DATE_PATTERN.test(line)) {
+      if (current) {
+        entries.push(current.trim());
+      }
+      current = line;
+      return;
+    }
+
+    if (current) {
+      current += " " + line;
+    } else {
+      current = line;
+    }
+  });
+
+  if (current) {
+    entries.push(current.trim());
+  }
+
+  return entries;
+}
+
+function buildDraftFromBlock(block) {
+  const dateMatch = block.match(ENTRY_DATE_PATTERN);
+  const date = dateMatch ? dateMatch[0] : "";
+  const amounts = (block.match(CURRENCY_PATTERN) || []).map(value =>
+    parseFloat(value.replace(/₹/g, "").replace(/Rs\.?\s*/gi, "").replace(/,/g, "").trim())
+  );
+  const lower = block.toLowerCase();
+  const direction = lower.includes("credit") || lower.includes("received") ? "credit" : "debit";
+  const amount = amounts.length ? amounts[amounts.length - 1] : "";
+  const description = block
+    .replace(date, " ")
+    .replace(CURRENCY_PATTERN, " ")
+    .replace(TIME_PATTERN, " ")
+    .replace(/\b(?:debit|credit)\b/gi, " ")
+    .replace(/\b(?:transaction id|utr no\.?|paid by|credited to)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+
+  return createTransactionRecord({
+    date,
+    description,
+    debit: direction === "debit" ? amount : "",
+    credit: direction === "credit" ? amount : ""
+  });
+}
+
+function renderManualDrafts() {
+  const tbody = document.querySelector("#manualDraftTable tbody");
+  const status = document.getElementById("manualImportStatus");
+
+  tbody.innerHTML = "";
+
+  if (!manualDrafts.length) {
+    status.textContent =
+      document.getElementById("manualImportText").value.trim()
+        ? "No draft rows generated yet. Try Generate Draft Rows and then edit the results."
+        : "No OCR text loaded yet.";
+    return;
+  }
+
+  status.textContent = `${manualDrafts.length} draft row(s) ready for review before import.`;
+
+  manualDrafts.forEach((draft, index) => {
+    const row = document.createElement("tr");
+
+    FIELD_CONFIG.forEach(field => {
+      const cell = document.createElement("td");
+      let control;
+
+      if (field.type === "select") {
+        control = createSelect(field.optionType, draft[field.key], value => {
+          if (value === NEW_OPTION_VALUE) {
+            createManualDraftOption(field.optionType, index, field.key);
+            return;
+          }
+
+          updateManualDraft(index, field.key, value);
+        });
+      } else {
+        control = document.createElement("input");
+        control.type = "text";
+        control.value = draft[field.key];
+        control.addEventListener("input", event => {
+          updateManualDraft(index, field.key, event.target.value);
+        });
+      }
+
+      cell.appendChild(control);
+      row.appendChild(cell);
+    });
+
+    const actionCell = document.createElement("td");
+    const removeButton = document.createElement("button");
+    removeButton.textContent = "Delete";
+    removeButton.className = "danger";
+    removeButton.onclick = () => {
+      manualDrafts.splice(index, 1);
+      render();
+    };
+    actionCell.appendChild(removeButton);
+    row.appendChild(actionCell);
+
+    tbody.appendChild(row);
+  });
+}
+
+function updateManualDraft(index, key, value) {
+  manualDrafts[index][key] = value;
+}
+
+function createManualDraftOption(type, draftIndex, fieldKey) {
+  const label = readableType(type);
+  const value = window.prompt(`Create a new ${label.toLowerCase()}:`, "");
+
+  if (value === null) {
+    render();
+    return;
+  }
+
+  const result = addOption(type, value, false);
+
+  if (!result.ok) {
+    showOptionError(type, result.message);
+    render();
+    return;
+  }
+
+  updateManualDraft(draftIndex, fieldKey, result.value);
+  render();
+}
+
+function addManualDraftsToTracker() {
+  if (!manualDrafts.length) {
+    window.alert("Generate draft rows first.");
+    return;
+  }
+
+  const validDrafts = manualDrafts.map(createTransactionRecord);
+  transactions = [...transactions, ...validDrafts];
+  saveTransactions();
+  localStorage.setItem(MANUAL_IMPORT_STORAGE_KEY, document.getElementById("manualImportText").value);
+  manualDrafts = [];
+  document.getElementById("manualImportText").value = "";
+  localStorage.removeItem(MANUAL_IMPORT_STORAGE_KEY);
+  setActiveTab("records");
+  render();
 }

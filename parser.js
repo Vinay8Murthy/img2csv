@@ -1,5 +1,13 @@
-const DATE_PATTERN = /\b\d{2}[\/-]\d{2}[\/-]\d{2,4}\b/;
-const AMOUNT_PATTERN = /-?\d{1,3}(?:,\d{3})*(?:\.\d{2})|-?\d+\.\d{2}/g;
+const MONTH_NAMES = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec";
+const NUMERIC_DATE_PATTERN = /\b\d{2}[\/-]\d{2}[\/-]\d{2,4}\b/;
+const TEXTUAL_DATE_PATTERN = new RegExp(`\\b(?:${MONTH_NAMES})\\s+\\d{1,2},\\s+\\d{4}\\b`, "i");
+const DATE_PATTERN = new RegExp(
+  `(?:${NUMERIC_DATE_PATTERN.source})|(?:${TEXTUAL_DATE_PATTERN.source})`,
+  "i"
+);
+const AMOUNT_PATTERN =
+  /(?:₹|Rs\.?\s*)\s*-?\d[\d,]*(?:\.\d{2})?|-?\d{1,3}(?:,\d{3})+(?:\.\d{2})?|-?\d+\.\d{2}/g;
+const TIME_PATTERN = /\b\d{1,2}:\d{2}\s*(?:am|pm)\b/i;
 const CREDIT_KEYWORDS = [
   "credit",
   "cr",
@@ -9,6 +17,8 @@ const CREDIT_KEYWORDS = [
   "deposit",
   "cash dep",
   "received",
+  "received from",
+  "credited to",
   "reversal"
 ];
 const DEBIT_KEYWORDS = [
@@ -20,6 +30,7 @@ const DEBIT_KEYWORDS = [
   "purchase",
   "payment",
   "upi",
+  "paid to",
   "pos",
   "bill",
   "transfer to",
@@ -127,6 +138,14 @@ function parseEntry(entry, previousBalance) {
 }
 
 function analyzeAmounts(amounts, previousBalance, hint) {
+  if (!amounts.length) {
+    return {
+      amount: "",
+      direction: hint || "debit",
+      balance: previousBalance
+    };
+  }
+
   const diffPair = findDiffPair(amounts);
 
   if (diffPair) {
@@ -136,6 +155,14 @@ function analyzeAmounts(amounts, previousBalance, hint) {
       amount: diffPair.amount,
       direction: direction || "debit",
       balance: diffPair.currentBalance
+    };
+  }
+
+  if (hint && amounts.length === 1) {
+    return {
+      amount: amounts[0],
+      direction: hint,
+      balance: previousBalance
     };
   }
 
@@ -255,6 +282,8 @@ function cleanDescription(body, amountStrings) {
   });
 
   return description
+    .replace(TIME_PATTERN, " ")
+    .replace(/\b(?:debit|credit)\b/gi, " ")
     .replace(/\b(?:cr|dr)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -262,7 +291,7 @@ function cleanDescription(body, amountStrings) {
 }
 
 function parseAmount(value) {
-  return parseFloat(value.replace(/,/g, ""));
+  return parseFloat(value.replace(/₹/g, "").replace(/Rs\.?\s*/gi, "").replace(/,/g, "").trim());
 }
 
 function roundToCents(value) {

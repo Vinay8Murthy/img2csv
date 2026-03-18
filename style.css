@@ -81,6 +81,10 @@ h1 {
   margin-top: 24px;
 }
 
+.toolbar.compact {
+  margin-top: 16px;
+}
+
 button,
 .button-link,
 input[type="file"]::file-selector-button {
@@ -160,6 +164,23 @@ input[type="file"]::file-selector-button {
   color: #fff;
 }
 
+.record-controls {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 240px;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.record-controls input,
+.record-controls select,
+.manual-textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #d7d0bf;
+  border-radius: 12px;
+  background: #fff;
+}
+
 .tab-panel {
   display: none;
   margin-top: 18px;
@@ -237,6 +258,16 @@ td input:focus {
   border-color: var(--primary);
 }
 
+td select:focus,
+.record-controls input:focus,
+.record-controls select:focus,
+.manual-textarea:focus,
+.manager-form input:focus,
+.option-row input:focus {
+  outline: 2px solid rgba(31, 107, 82, 0.2);
+  border-color: var(--primary);
+}
+
 .field-error {
   border-color: var(--danger);
   background: #fff5f3;
@@ -275,6 +306,17 @@ td input:focus {
   min-height: 20px;
   margin-top: 10px;
   color: var(--danger);
+}
+
+.manual-textarea {
+  min-height: 180px;
+  margin-top: 8px;
+  resize: vertical;
+  font-family: Consolas, "Courier New", monospace;
+}
+
+.compact-panel {
+  margin-top: 12px;
 }
 
 .option-list {
@@ -316,6 +358,10 @@ td input:focus {
 
   .toolbar {
     align-items: stretch;
+  }
+
+  .record-controls {
+    grid-template-columns: 1fr;
   }
 
   button,

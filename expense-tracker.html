@@ -11,6 +11,7 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+<script src="parser.js"></script>
 </head>
 <body>
 <main class="page-shell">
@@ -29,6 +30,7 @@ labels directly in the table.
 
 <div class="toolbar">
 <button id="addRowBtn">+ Add Record</button>
+<button id="deleteSelectedBtn" class="secondary">Delete Selected</button>
 <button id="csvBtn">Download CSV</button>
 <button id="excelBtn">Download Excel</button>
 <button id="pdfBtn">Download PDF</button>
@@ -41,15 +43,65 @@ No records loaded yet. Scan a statement or add a row manually.
 
 <div class="tabs" role="tablist" aria-label="Expense tracker sections">
 <button class="tab-button active" data-tab="records" role="tab" aria-selected="true">Records</button>
+<button class="tab-button" data-tab="manualImport" role="tab" aria-selected="false">Manual Import</button>
 <button class="tab-button" data-tab="categories" role="tab" aria-selected="false">Categories</button>
 <button class="tab-button" data-tab="subCategories" role="tab" aria-selected="false">Sub Categories</button>
 <button class="tab-button" data-tab="groups" role="tab" aria-selected="false">Groups</button>
 </div>
 
 <section class="tab-panel active" data-panel="records">
+<div class="record-controls">
+<input id="filterInput" type="text" placeholder="Filter by date, description, category, sub category, or group">
+<select id="sortSelect">
+<option value="importedAt-desc">Newest Imported</option>
+<option value="importedAt-asc">Oldest Imported</option>
+<option value="date-desc">Date Descending</option>
+<option value="date-asc">Date Ascending</option>
+<option value="description-asc">Description A-Z</option>
+<option value="description-desc">Description Z-A</option>
+<option value="amount-desc">Amount High-Low</option>
+<option value="amount-asc">Amount Low-High</option>
+</select>
+</div>
 <div class="validation-summary" id="validationSummary"></div>
 <div class="table-wrap">
 <table id="table">
+<thead>
+<tr>
+<th><input id="selectAllRows" type="checkbox" aria-label="Select all visible rows"></th>
+<th>Date</th>
+<th>Description</th>
+<th>Debit</th>
+<th>Credit</th>
+<th>Category</th>
+<th>Sub Category</th>
+<th>Group</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+</div>
+</section>
+
+<section class="tab-panel" data-panel="manualImport">
+<div class="manager-card">
+<h2>Manual Import</h2>
+<p class="manager-copy">
+If auto-detection misses a screenshot or PDF, paste or review the OCR text here,
+generate draft rows, then edit them before adding them to the expense tracker.
+</p>
+<textarea id="manualImportText" class="manual-textarea" placeholder="Paste OCR text here"></textarea>
+<div class="toolbar compact">
+<button id="generateDraftsBtn">Generate Draft Rows</button>
+<button id="addDraftsBtn">Add Draft Rows To Tracker</button>
+<button id="clearManualImportBtn" class="secondary">Clear OCR Text</button>
+</div>
+<div id="manualImportStatus" class="status-panel compact-panel">
+No OCR text loaded yet.
+</div>
+<div class="table-wrap">
+<table id="manualDraftTable">
 <thead>
 <tr>
 <th>Date</th>
@@ -64,6 +116,7 @@ No records loaded yet. Scan a statement or add a row manually.
 </thead>
 <tbody></tbody>
 </table>
+</div>
 </div>
 </section>
 
@@ -104,7 +157,6 @@ No records loaded yet. Scan a statement or add a row manually.
 <div id="groupError" class="inline-error"></div>
 <div id="groupList" class="option-list"></div>
 </div>
-</section>
 </section>
 </main>
 

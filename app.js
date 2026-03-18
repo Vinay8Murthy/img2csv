@@ -1,4 +1,5 @@
 const STORAGE_KEY = "expenseTrackerTransactions";
+const MANUAL_IMPORT_STORAGE_KEY = "expenseTrackerManualImportText";
 
 document.getElementById("scanBtn").onclick = async () => {
   const fileInput = document.getElementById("fileInput");
@@ -24,6 +25,15 @@ document.getElementById("scanBtn").onclick = async () => {
     const scannedTransactions = detectAndParse(text).map(transaction =>
       createTransactionRecord(transaction, file.name)
     );
+
+    if (!scannedTransactions.length) {
+      localStorage.setItem(MANUAL_IMPORT_STORAGE_KEY, text);
+      status.textContent =
+        "No transactions were detected automatically. Opening manual import so you can map the OCR text.";
+      window.location.href = "expense-tracker.html?tab=manualImport";
+      return;
+    }
+
     const transactions = [...existingTransactions, ...scannedTransactions];
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
