@@ -1,3 +1,4 @@
+(() => {
 const STORAGE_KEY = "expenseTrackerTransactions";
 const OPTIONS_STORAGE_KEY = "expenseTrackerOptions";
 const MANUAL_IMPORT_STORAGE_KEY = "expenseTrackerManualImportText";
@@ -982,3 +983,4 @@ function addManualDraftsToTracker() {
   setActiveTab("records");
   render();
 }
+})();
